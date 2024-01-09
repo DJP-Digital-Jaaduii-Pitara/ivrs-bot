@@ -1,4 +1,6 @@
 **/node_modules
+**/drive-files
+**/bruno
 venv/**
 **/.DS_Store
 output.wav

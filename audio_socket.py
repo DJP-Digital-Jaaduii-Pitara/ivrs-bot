@@ -2,7 +2,7 @@ from pydub import AudioSegment
 from pydub.utils import make_chunks
 from flask import Blueprint
 from datetime import datetime
-from urllib.parse import parse_qs
+from urllib import parse
 from telemetry import Telemetry
 
 import os
@@ -17,14 +17,11 @@ from pathlib import Path
 
 audio_socket = Blueprint('audio_socket', __name__)
 duration = 20 # no of milliseconds of each base64 string from audio file
-audio_types = ["story", "rhyme", "riddle"]
+audio_types = ["story", "song", "riddle"]
 
 AUDIO_CACHE = {}
 
-def get_audio(input_selector, language):
-
-    if input_selector > 2:
-        return None
+def get_audio(audio_key):
 
     urlData = os.environ['IVRS_CONFIG_URL']
     webURL = downloader.urlopen(urlData)
@@ -32,27 +29,24 @@ def get_audio(input_selector, language):
     encoding = webURL.info().get_content_charset('utf-8')
     config = json.loads(data.decode(encoding))
 
-    audio_type = audio_types[input_selector]
-    no_of_audios = len(config[f"{audio_type}:{language}"])
+    if audio_key not in config:
+        return None
+
+    no_of_audios = len(config[audio_key])
 
     day_of_year = datetime.today().timetuple().tm_yday
     mod_day_no = int(day_of_year % no_of_audios)
 
     audio_index = no_of_audios if mod_day_no == 0 else mod_day_no
 
-    return config[f"{audio_type}:{language}"][audio_index - 1]
+    return config[audio_key][audio_index - 1]
 
-def get_chunks(input_selector, language, file_path):
-    audio_type = audio_types[input_selector]
+def get_chunks(audio_key, file_path):
 
     day_of_year = datetime.today().timetuple().tm_yday
-    path = Path(file_path)
-    filename = path.stem + path.suffix.split("?")[0]
 
-    cache_key = f"{audio_type}:{language}"
-
-    if cache_key in AUDIO_CACHE:
-        chunk_detail = AUDIO_CACHE[cache_key]
+    if audio_key in AUDIO_CACHE:
+        chunk_detail = AUDIO_CACHE[audio_key]
 
         if chunk_detail['cached_on'] == day_of_year:
             return chunk_detail['chunks']
@@ -84,7 +78,7 @@ def get_chunks(input_selector, language, file_path):
             }
         })
 
-    AUDIO_CACHE[cache_key] = {'cached_on': day_of_year, 'chunks': chunks_array}
+    AUDIO_CACHE[audio_key] = {'cached_on': day_of_year, 'chunks': chunks_array}
 
     remove_temp_file(local_file_path)
     remove_temp_file(local_converted_file_path)
@@ -111,6 +105,7 @@ def echo(ws, language):
         event = request_payload['event']
 
         if event == 'start':
+            print("inside start")
             did = hashlib.md5(request_payload['start']['from'].encode()).hexdigest()
             telemetry = Telemetry(request_payload['stream_sid'], did)
             request_payload['start']['from'] = did
@@ -127,11 +122,26 @@ def echo(ws, language):
 
             input_selector = int(request_payload["dtmf"]["digit"]) - 1
 
-            audio_url = get_audio(input_selector, language)
             selected_audio_type = audio_types[input_selector] if input_selector < len(audio_types) else None
+
+            audio_key = f"{selected_audio_type}:{language}"
+            audio_url = None
+            if selected_audio_type:
+                audio_url = get_audio(audio_key)
+
+                if not audio_url:
+                    audio_key = f"{selected_audio_type}:{language}:empty"
+                    audio_url = get_audio(audio_key)
+
+            if not audio_url:
+                audio_key = f"invalid_option:{language}"
+                audio_url = get_audio(audio_key)
+
             telemetry.interact(input=input_selector, language=language, audio_type=selected_audio_type,audio_name=audio_url)
+
             if audio_url:
-                chunks = get_chunks(input_selector, language, audio_url)
+                audio_url = audio_url.replace(" ", "%20");
+                chunks = get_chunks(audio_key, audio_url)
                 counter = 1
                 for chunk in chunks:
                     chunk["stream_sid"] = session_id
@@ -146,6 +156,9 @@ def echo(ws, language):
                 ws.send(json.dumps(mark_event))
                 push_telemetry_events(telemetry)
                 is_audio_sent = True
+            else:
+                pass
+
         elif event == "mark":
             # mark_event = {"event":"stop", "sequence_number": len(chunks) + 1, "stream_sid": session_id,"mark":{"name":"audio_complete"}}
             # ws.send(json.dumps(mark_event))

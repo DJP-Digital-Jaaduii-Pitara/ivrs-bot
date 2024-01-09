@@ -8,7 +8,6 @@ import json
 
 app = Flask(__name__)
 sockets = Sockets(app)
-connection_chunks = json.loads('{}')
 
 from api import api
 app.register_blueprint(api)
